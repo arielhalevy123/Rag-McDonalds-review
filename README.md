@@ -9,6 +9,12 @@ This project demonstrates a complete retrieval-only RAG pipeline:
 - **Retrieval**: User queries are embedded and matched against document embeddings using cosine similarity. The system uses over-fetching and re-ranking to improve recall by compensating for ANN approximation
 - **Display**: Retrieved chunks are displayed with similarity scores, filtered by a configurable threshold
 
+## 🎥 Demo Video
+
+**Watch the demo video**: [McDonald's RAG – Semantic Search Demo](https://github.com/arielhalevy123/Rag-McDonalds-review/issues/1)
+
+This video demonstrates the system in action, showing how semantic search retrieves relevant McDonald's store reviews based on user queries.
+
 ## Dataset
 
 **Source**: McDonald's Store Reviews from Kaggle (original dataset is large)
