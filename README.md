@@ -20,6 +20,21 @@ This project demonstrates a complete retrieval-only RAG pipeline:
 
 Each review is treated as a single document chunk (see Design Decisions for rationale).
 
+## Why This Dataset
+
+This dataset was chosen because customer reviews are a natural fit for
+semantic search and retrieval tasks. Reviews are unstructured, written in
+natural language, and cover a wide range of topics such as service quality,
+food quality, cleanliness, pricing, and overall experience.
+
+Using McDonald's store reviews allows the system to demonstrate meaningful
+semantic retrieval over real-world user-generated content, where relevant
+information is not always expressed using the same keywords.
+
+Additionally, the dataset size was intentionally kept small (~15,000 characters,
+~100 reviews) to stay within assignment constraints, control embedding costs,
+and focus on retrieval quality rather than scale.
+
 ## Setup
 
 ### Prerequisites
@@ -89,17 +104,25 @@ This script:
 - Splitting would fragment sentiment and context
 - This is a deliberate design choice for this dataset
 
-### Vector Database
+### Why Chroma
 
-**Decision**: Chroma (local persistent database)
+Chroma was chosen as the vector database for this project due to its simplicity,
+lightweight nature, and suitability for local, retrieval-focused systems.
 
-**Rationale**:
-- **Simplicity**: No external service setup required
-- **No credentials**: Works offline after initial ingestion
-- **Assignment scope**: Suitable for demonstration purposes
-- **Offline operation**: Once embeddings are created, queries work without API calls (except for query embedding)
+For the scope of this assignment, Chroma provides:
+- **Local persistence** without requiring external services or credentials
+- **Easy setup** and minimal configuration
+- **Fast iteration** during development and testing
+- **Clear API** for storing and querying embeddings
 
-**Trade-off**: Local-only vs. cloud scalability. For production at scale, consider cloud vector databases (Pinecone, Weaviate, etc.).
+Using a local Chroma database allows the system to operate entirely on the local
+machine after ingestion, with no dependency on external vector database services.
+This keeps the focus on retrieval logic, similarity scoring, and system design
+rather than infrastructure setup.
+
+**Trade-off**: Chroma is best suited for small to medium datasets and local use.
+For large-scale or production systems, a managed cloud vector database (e.g.
+Pinecone, Weaviate, or Milvus) would be more appropriate.
 
 ### Similarity Scoring
 
@@ -110,11 +133,43 @@ This script:
 cosine_similarity = np.dot(query_emb, doc_emb) / (np.linalg.norm(query_emb) * np.linalg.norm(doc_emb))
 ```
 
-**Rationale**:
+**Why Cosine Similarity and Not Other Metrics?**
+
+Cosine similarity was chosen over alternative distance metrics (Euclidean distance, Manhattan distance, dot product) for several key reasons:
+
+1. **Direction over Magnitude**: Cosine similarity measures the angle between vectors, focusing on semantic direction rather than magnitude. This is ideal for embeddings where the meaning is encoded in the vector direction, not its length. Two documents can be semantically similar even if one is longer (has a larger magnitude).
+
+2. **Normalized Embeddings**: OpenAI's `text-embedding-3-small` produces normalized embeddings (unit vectors). For normalized vectors:
+   - Cosine similarity = dot product (since norms are 1)
+   - Euclidean distance becomes less informative (all vectors have the same length)
+   - Cosine similarity provides a bounded, interpretable measure [0, 1]
+
+3. **Semantic Interpretation**: 
+   - `1.0` = identical semantic meaning (vectors point in same direction)
+   - `0.0` = orthogonal/uncorrelated (no semantic relationship)
+   - Negative values = opposite meanings (rare with normalized embeddings)
+   - This interpretation is more intuitive than distance metrics where smaller values mean "closer"
+
+4. **Robustness to Document Length**: Reviews vary in length, but cosine similarity treats all vectors as unit vectors, making it robust to length differences. Euclidean distance would penalize longer documents even if they're semantically similar.
+
+5. **Standard Practice**: Cosine similarity is the de facto standard for semantic search with embeddings, used by most production RAG systems and vector databases.
+
+**Why Not Euclidean Distance?**
+- Euclidean distance measures magnitude differences, which is less relevant for semantic similarity
+- With normalized embeddings, all vectors have similar magnitudes, making Euclidean distance less discriminative
+- Distance values are unbounded and less interpretable (what does "distance 0.5" mean?)
+
+**Why Not Dot Product?**
+- For normalized embeddings, dot product equals cosine similarity, so they're equivalent
+- However, cosine similarity is more explicit about its normalization and more interpretable conceptually
+- If embeddings weren't normalized, dot product would be biased toward longer documents
+
+**Rationale Summary**:
 - Provides true semantic similarity measure (not a distance-based heuristic)
 - Bounded [0, 1] for normalized embeddings (OpenAI embeddings are normalized)
 - More interpretable than distance-based measures
 - Directly interpretable: 1.0 = identical, 0.0 = orthogonal
+- Robust to document length variations
 
 ### Threshold Semantics
 
@@ -172,17 +227,89 @@ Here are 5 example queries to test the system:
 **Expected**: Positive reviews about food taste, quality, or freshness
 **Evaluation**: Should return reviews praising food, with similarity scores typically >0.4
 
-### 3. "Clean restaurant"
-**Expected**: Reviews mentioning cleanliness, hygiene, or restaurant condition
-**Evaluation**: Should return reviews discussing cleanliness (both positive and negative)
+### 3. "Fast service" (High Threshold: 0.5, Top K: 5)
+**Expected**: Reviews about fast service with strict filtering
+**Evaluation**: Demonstrates high similarity threshold (0.5) filtering to return only highly relevant results
 
-### 4. "Drive-thru experience"
-**Expected**: Reviews specifically about drive-thru service
-**Evaluation**: Should return reviews mentioning drive-thru, with context about speed, accuracy, or convenience
+### 4. "Food" (Low Threshold: 0.2, Top K: 10)
+**Expected**: Broad food-related reviews with permissive filtering
+**Evaluation**: Demonstrates low similarity threshold (0.2) and higher top_k (10) to retrieve more results with broader relevance
 
-### 5. "Price and value"
-**Expected**: Reviews discussing pricing, value for money, or cost
-**Evaluation**: Should return reviews mentioning prices, whether positive (good value) or negative (too expensive)
+### 5. "Friendly staff" (Medium Threshold: 0.4, Top K: 3)
+**Expected**: Reviews about friendly staff with balanced filtering
+**Evaluation**: Demonstrates medium similarity threshold (0.4) and lower top_k (3) to return fewer but highly relevant results
+
+## Screenshots
+
+Below are screenshots demonstrating the system in action for each of the 5 example scenarios:
+
+### Scenario 1: "Poor service and slow"
+![Poor Service and Slow](screenshots/scenario1_poor_service.png)
+
+This query successfully retrieves reviews complaining about service quality, slow service, and order issues. The system returns 5 results with similarity scores ranging from 0.5120 to 0.5829, showing relevant reviews about poor service experiences.
+
+**Key Results:**
+- `doc_007`: "Poor service and constantly messing orders up!" (Similarity: 0.5829)
+- `doc_090`: "A little slow the service.. Had to do the order myself at the kiosk" (Similarity: 0.5649)
+- `doc_078`: "Not too happy with customer service they take sweet time to get you order" (Similarity: 0.5294)
+
+### Scenario 2: "Good food quality"
+![Good Food Quality](screenshots/scenario2_good_food.png)
+
+This query retrieves positive reviews about food taste, quality, and freshness. The system returns 5 results with similarity scores ranging from 0.4050 to 0.4643, demonstrating semantic understanding of food quality discussions.
+
+**Key Results:**
+- `doc_083`: Review mentioning "food wad good" along with cleanliness (Similarity: 0.4643)
+- `doc_066`: "The food is very rich I like to go a lot because the food is very good" (Similarity: 0.4450)
+- `doc_003`: "Good hot food served quickly, kinda pricey!!" (Similarity: 0.4254)
+
+### Scenario 3: "Fast service" (High Threshold: 0.5, Top K: 5)
+![Fast Service - High Threshold](screenshots/scenario3_high_threshold.png)
+
+This query demonstrates the effect of a **high similarity threshold (0.5)** with `top_k=5`. The strict threshold filters out less relevant results, returning only the most semantically similar reviews. The system returns 2 results (fewer than the requested top_k=5) because only these meet the 0.5 threshold requirement.
+
+**Parameters:**
+- **Top K**: 5
+- **Similarity Threshold**: 0.5 (high/strict)
+
+**Key Results:**
+- `doc_037`: "Fast service, clean bathroom, the lady was very nice and helpful. I didn't wait long for my food." (Similarity: 0.5316)
+- `doc_003`: "Good hot food served quickly, kinda pricey!!" (Similarity: 0.5020)
+
+**Insight**: High thresholds prioritize precision over recall, ensuring only highly relevant results are returned.
+
+### Scenario 4: "Food" (Low Threshold: 0.2, Top K: 10)
+![Food - Low Threshold](screenshots/scenario4_low_threshold.png)
+
+This query demonstrates the effect of a **low similarity threshold (0.2)** with `top_k=10`. The permissive threshold allows more results to pass through, including those with weaker semantic similarity. The system returns 10 results, showing how lower thresholds increase recall.
+
+**Parameters:**
+- **Top K**: 10
+- **Similarity Threshold**: 0.2 (low/permissive)
+
+**Key Results:**
+- `doc_003`: "Good hot food served quickly, kinda pricey!!" (Similarity: 0.3866)
+- `doc_032`: "The best food ever and best worker named ally" (Similarity: 0.3697)
+- `doc_066`: "The food is very rich I like to go a lot because the food is very good" (Similarity: 0.3635)
+- Additional results with similarity scores ranging down to ~0.2
+
+**Insight**: Low thresholds prioritize recall over precision, retrieving more results including less directly relevant ones.
+
+### Scenario 5: "Friendly staff" (Medium Threshold: 0.4, Top K: 3)
+![Friendly Staff - Medium Threshold](screenshots/scenario5_medium_threshold.png)
+
+This query demonstrates a **medium similarity threshold (0.4)** with `top_k=3`. This balanced approach returns fewer but highly relevant results. The system returns exactly 3 results, all with similarity scores above 0.5, showing how medium thresholds balance precision and recall.
+
+**Parameters:**
+- **Top K**: 3
+- **Similarity Threshold**: 0.4 (medium/balanced)
+
+**Key Results:**
+- `doc_089`: "Very friendly staff. Quick service. Good price. Newly renovated." (Similarity: 0.5862)
+- `doc_048`: "Cleaness McDonald's, friendly attentive staff!" (Similarity: 0.5363)
+- `doc_054`: "good, service, everything is clean and good service" (Similarity: 0.5166)
+
+**Insight**: Medium thresholds with lower top_k provide a balanced approach, focusing on the most relevant results while maintaining reasonable recall.
 
 ## API Endpoints
 
