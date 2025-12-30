@@ -29,7 +29,18 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 chroma = chromadb.PersistentClient(path=str(_CHROMA_DIR))
-col = chroma.get_or_create_collection(name=COLLECTION_NAME)
+
+# Delete existing collection if it exists (distance metric cannot be changed after creation)
+try:
+    chroma.delete_collection(name=COLLECTION_NAME)
+except Exception:
+    pass  # Collection doesn't exist, which is fine
+
+# Create collection with cosine distance metric
+col = chroma.create_collection(
+    name=COLLECTION_NAME,
+    metadata={"hnsw:space": "cosine"}
+)
 
 docs, ids = [], []
 with open(_DATA_PATH, "r", encoding="utf-8") as f:
@@ -52,12 +63,12 @@ for d, i in zip(docs, ids):
         new_ids.append(i)
 
 if not new_docs:
-    print("✅ Nothing new to ingest.")
+    print("Nothing new to ingest.")
     raise SystemExit(0)
 
 emb = client.embeddings.create(model=EMBED_MODEL, input=new_docs)
 vectors = [e.embedding for e in emb.data]
 
 col.add(ids=new_ids, documents=new_docs, embeddings=vectors)
-print(f"✅ Ingested {len(new_docs)} docs into {_CHROMA_DIR} / {COLLECTION_NAME}")
+print(f"Ingested {len(new_docs)} docs into {_CHROMA_DIR} / {COLLECTION_NAME}")
 

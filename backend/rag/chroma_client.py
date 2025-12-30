@@ -16,6 +16,25 @@ COLLECTION_NAME = "mcd_reviews"
 # Initialize persistent Chroma client
 _chroma_client = chromadb.PersistentClient(path=str(_CHROMA_DIR))
 
-# Get or create collection
-collection = _chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+# Get or create collection with cosine distance metric
+# Note: If collection exists with different metadata, we need to delete and recreate it
+# But we only do this check once, not on every import
+try:
+    existing_collection = _chroma_client.get_collection(name=COLLECTION_NAME)
+    existing_metadata = existing_collection.metadata or {}
+    # Check if metadata matches (specifically the distance metric)
+    if existing_metadata.get("hnsw:space") != "cosine":
+        _chroma_client.delete_collection(name=COLLECTION_NAME)
+        collection = _chroma_client.create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"}
+        )
+    else:
+        collection = existing_collection
+except Exception:
+    # Collection doesn't exist, create it
+    collection = _chroma_client.create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"}
+    )
 

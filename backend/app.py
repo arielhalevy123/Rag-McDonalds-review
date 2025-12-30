@@ -9,10 +9,10 @@ from .rag.retriever import retrieve
 
 app = FastAPI(title="Retrieval-only RAG API")
 
-# Enable CORS for local development
+# Enable CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],  # Allow all origins in development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

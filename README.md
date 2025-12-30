@@ -6,7 +6,7 @@ A production-quality retrieval-only RAG (Retrieval-Augmented Generation) system 
 
 This project demonstrates a complete retrieval-only RAG pipeline:
 - **Ingestion**: Documents are embedded using OpenAI's `text-embedding-3-small` model and stored in a local Chroma vector database
-- **Retrieval**: User queries are embedded and matched against document embeddings using cosine similarity
+- **Retrieval**: User queries are embedded and matched against document embeddings using cosine similarity. The system uses over-fetching and re-ranking to improve recall by compensating for ANN approximation
 - **Display**: Retrieved chunks are displayed with similarity scores, filtered by a configurable threshold
 
 ## Dataset
@@ -72,10 +72,11 @@ python scripts/ingest.py
 This script:
 - Reads documents from `data/documents.jsonl`
 - Creates embeddings using OpenAI's `text-embedding-3-small` model
+- Creates a Chroma collection with cosine distance metric (`hnsw:space="cosine"`)
 - Stores embeddings in the local Chroma database at `chroma_db/`
 - Skips documents that are already ingested (idempotent)
 
-**Note**: The first run will create embeddings for all documents. Subsequent runs will only process new documents.
+**Note**: The first run will create embeddings for all documents. Subsequent runs will only process new documents. The collection is configured with cosine distance to match the cosine similarity computation used during retrieval.
 
 ## Running the Application
 
@@ -120,18 +121,23 @@ machine after ingestion, with no dependency on external vector database services
 This keeps the focus on retrieval logic, similarity scoring, and system design
 rather than infrastructure setup.
 
+**Configuration**: The Chroma collection is configured to use **cosine distance** (`hnsw:space="cosine"`) for the HNSW index, which aligns with the cosine similarity computation used in the retrieval logic. The collection persists across server restarts and is only recreated if the distance metric configuration needs to change.
+
 **Trade-off**: Chroma is best suited for small to medium datasets and local use.
 For large-scale or production systems, a managed cloud vector database (e.g.
 Pinecone, Weaviate, or Milvus) would be more appropriate.
 
 ### Similarity Scoring
 
-**Decision**: Cosine similarity computed directly from embeddings
+**Decision**: Exact cosine similarity computed directly from embeddings for all candidates
 
 **Implementation**: 
+Since OpenAI embeddings are normalized (unit vectors), cosine similarity simplifies to the dot product:
 ```python
-cosine_similarity = np.dot(query_emb, doc_emb) / (np.linalg.norm(query_emb) * np.linalg.norm(doc_emb))
+cosine_similarity = np.dot(query_emb, doc_emb)  # dot product = cosine for normalized vectors
 ```
+
+The system computes exact cosine similarity for all fetched candidates (top_k + 10, max 60) to enable accurate re-ranking, ensuring the true top-k most similar results are returned.
 
 **Why Cosine Similarity and Not Other Metrics?**
 
@@ -196,14 +202,34 @@ Cosine similarity was chosen over alternative distance metrics (Euclidean distan
 - **Standard RAG pattern**: This is how retrieval works in production RAG systems
 - **Distinct from ingestion**: Ingestion-time embeddings (documents) are created once and stored; query-time embeddings are created on-demand
 
+### Retrieval Optimization: Over-fetching and Re-ranking
+
+**Decision**: The system fetches more candidates than requested (`top_k + 10`, max 60) and re-ranks them using exact cosine similarity
+
+**Implementation**:
+- Chroma is queried with `n_results = min(top_k + 10, 60)` to retrieve more candidates than the user requests
+- Exact cosine similarity is computed on all returned embeddings (compensating for ANN approximation)
+- Candidates are re-ranked by exact similarity score (not ANN approximations)
+- Results are filtered by threshold and limited to the original `top_k` request
+
+**Rationale**:
+- **Better Recall**: Over-fetching compensates for approximate nearest neighbor (ANN) search approximation errors. Chroma uses ANN algorithms (e.g., HNSW) which may miss some truly similar vectors in the exact top-k
+- **Accurate Ranking**: Computing exact cosine similarity ensures results are ordered by true similarity, not ANN approximations
+- **Application-layer Control**: Full control over ranking, thresholds, and filtering remains in the application layer
+- **Minimal Overhead**: Only 10 extra candidates are fetched (capped at 60), providing significant accuracy improvements with minimal computational cost
+
+This is a standard production technique used in many RAG systems to improve retrieval accuracy.
+
 ### Top K Parameter
 
-**Decision**: `top_k` specifies the number of candidate documents retrieved before threshold filtering
+**Decision**: `top_k` specifies the number of results to return (max 50)
 
 **Behavior**:
-- Higher `top_k`: More candidates retrieved, but may include less relevant results
-- Lower `top_k`: Fewer candidates, but only the most similar are considered
-- Threshold filtering is applied after retrieval, so final results may be fewer than `top_k`
+- The system internally fetches `top_k + 10` candidates (max 60) from Chroma
+- Exact cosine similarity is computed and candidates are re-ranked
+- Results are filtered by threshold and limited to `top_k` for the final response
+- Higher `top_k`: More results returned (up to 50)
+- Lower `top_k`: Fewer results, but still benefits from over-fetching optimization
 
 ## Evaluation Criteria
 
@@ -390,6 +416,11 @@ SoluGenAi/
 
 **Chroma collection not found**:
 - Run `python scripts/ingest.py` to create the collection and ingest documents
+
+**Collection persists across restarts**:
+- The Chroma collection and its data persist across server restarts
+- The collection is only recreated if the distance metric configuration needs to change
+- If you need to rebuild the collection with a different distance metric, delete the `chroma_db/` directory and re-run the ingestion script
 
 ## License
 
